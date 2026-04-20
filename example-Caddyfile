@@ -1,0 +1,26 @@
+# Minimal Caddyfile — all config from environment variables.
+#
+# Required env vars:
+#   S3_MAPPING_DATABASE_URL    Postgres URL
+#   S3_MAPPING_TABLE           Table name
+#   S3_MAPPING_DOMAIN_COLUMN   Domain column
+#   S3_MAPPING_ID_COLUMN       Mapping-ID column (UUID)
+#   S3_MAPPING_BUCKET          S3 bucket name
+#   S3_MAPPING_REGION          AWS region
+#
+# Optional:
+#   S3_MAPPING_CACHE_TTL       Cache TTL (default 30m)
+#   S3_MAPPING_SPA_FALLBACK    true/false
+#   S3_USE_IAM_PROVIDER        true for EC2 instance role
+#
+# Build:  xcaddy build --with github.com/thetestcoder/caddy-s3-mapping-transport
+# Run:    ./caddy run --config example-Caddyfile
+
+{
+	order s3_mapping before respond
+}
+
+:443 {
+	tls /path/to/cert.pem /path/to/key.pem
+	s3_mapping
+}
