@@ -72,6 +72,9 @@ func (c *s3Client) ping(ctx context.Context) error {
 		return fmt.Errorf("s3 ping: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("s3 ping: bucket not found")
+	}
 	if resp.StatusCode >= 500 {
 		return fmt.Errorf("s3 ping: status %d", resp.StatusCode)
 	}
