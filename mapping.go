@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"regexp"
@@ -121,6 +122,7 @@ func (h *S3MappingHandler) Provision(ctx caddy.Context) error {
 		return fmt.Errorf("s3_mapping: ping database: %w", err)
 	}
 	h.pool = pool
+	h.logger.Info("database connected", zap.String("database_url", redactDatabaseURL(h.DatabaseURL)))
 
 	// Domain cache
 	h.cache = newDomainCache()
@@ -132,6 +134,14 @@ func (h *S3MappingHandler) Provision(ctx caddy.Context) error {
 		return fmt.Errorf("s3_mapping: %w", err)
 	}
 	h.s3 = s3c
+	if err := h.s3.ping(context.Background()); err != nil {
+		h.pool.Close()
+		return fmt.Errorf("s3_mapping: %w", err)
+	}
+	h.logger.Info("s3 connected",
+		zap.String("bucket", h.Bucket),
+		zap.String("region", h.Region),
+	)
 
 	h.logger.Info("s3_mapping provisioned",
 		zap.String("bucket", h.Bucket),
@@ -212,8 +222,13 @@ func (h *S3MappingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, nex
 		return caddyhttp.Error(http.StatusBadGateway, err)
 	}
 	if !found {
+		h.logger.Info("hostname not mapped", zap.String("host", host))
 		return caddyhttp.Error(http.StatusNotFound, fmt.Errorf("domain %q not mapped", host))
 	}
+	h.logger.Info("hostname mapped",
+		zap.String("host", host),
+		zap.String("mapping_id", mappingID),
+	)
 
 	objectKey, err := buildObjectKey(mappingID, r.URL.Path)
 	if err != nil {
@@ -303,6 +318,14 @@ func (h *S3MappingHandler) cacheNegative(host string) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+func redactDatabaseURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "(invalid database_url)"
+	}
+	return u.Redacted()
+}
 
 func normalizeHost(hostport string) string {
 	h, _, err := net.SplitHostPort(hostport)

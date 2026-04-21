@@ -65,6 +65,19 @@ func newS3Client(bucket, region string, useIAM bool, accessKeyID, secretAccessKe
 	return c, nil
 }
 
+// ping verifies TLS connectivity, credentials, and reachability of the configured bucket (HeadBucket).
+func (c *s3Client) ping(ctx context.Context) error {
+	resp, err := c.signedS3Request(ctx, http.MethodHead, "")
+	if err != nil {
+		return fmt.Errorf("s3 ping: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("s3 ping: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func (c *s3Client) resolveCredentials(ctx context.Context) (aws.Credentials, error) {
 	if c.minioCreds != nil {
 		val, err := c.minioCreds.Get()
@@ -85,13 +98,21 @@ func (c *s3Client) resolveCredentials(ctx context.Context) (aws.Credentials, err
 
 // getObject performs a SigV4-signed GET for the given object key.
 func (c *s3Client) getObject(ctx context.Context, key string) (*http.Response, error) {
+	return c.signedS3Request(ctx, http.MethodGet, key)
+}
+
+func (c *s3Client) signedS3Request(ctx context.Context, method, key string) (*http.Response, error) {
+	objPath := "/" + key
+	if key == "" {
+		objPath = "/"
+	}
 	u := &url.URL{
 		Scheme: "https",
 		Host:   fmt.Sprintf("%s.s3.%s.amazonaws.com", c.bucket, c.region),
-		Path:   "/" + key,
+		Path:   objPath,
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -100,8 +121,10 @@ func (c *s3Client) getObject(ctx context.Context, key string) (*http.Response, e
 	req.Header.Set("Host", host)
 	req.Host = host
 	req.Header.Set("User-Agent", "Caddy-S3-MappingTransport/1.0")
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Encoding", "identity")
+	if method == http.MethodGet {
+		req.Header.Set("Accept", "*/*")
+		req.Header.Set("Accept-Encoding", "identity")
+	}
 	req.Header.Set("x-amz-content-sha256", emptySHA256)
 
 	creds, err := c.resolveCredentials(ctx)
