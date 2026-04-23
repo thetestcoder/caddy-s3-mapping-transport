@@ -2,6 +2,7 @@ package s3mapping
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -26,6 +27,10 @@ func init() {
 }
 
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// cacheClearPath is served before domain lookup so cache can be cleared even for
+// unmapped hosts or negative-cache entries.
+const cacheClearPath = "/dns-cache/mapping/clear"
 
 // S3MappingHandler resolves incoming Host → mapping UUID via Postgres,
 // then serves S3 objects jailed under that UUID prefix.
@@ -216,6 +221,10 @@ func (h *S3MappingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, nex
 		return caddyhttp.Error(http.StatusBadRequest, fmt.Errorf("missing Host header"))
 	}
 
+	if path.Clean("/"+r.URL.Path) == cacheClearPath {
+		return h.serveCacheClear(w, r, host)
+	}
+
 	mappingID, found, err := h.lookupMapping(r.Context(), host)
 	if err != nil {
 		h.logger.Error("domain lookup failed", zap.String("host", host), zap.Error(err))
@@ -268,6 +277,39 @@ func (h *S3MappingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, nex
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		h.logger.Debug("streaming body", zap.Error(err))
 	}
+	return nil
+}
+
+// serveCacheClear drops the in-memory mapping cache entry for the request Host.
+// It runs before Postgres lookup so operators can clear negative-cache rows.
+func (h *S3MappingHandler) serveCacheClear(w http.ResponseWriter, r *http.Request, host string) error {
+	switch r.Method {
+	case http.MethodGet, http.MethodPost, http.MethodDelete, http.MethodHead:
+	default:
+		w.Header().Set("Allow", "GET, HEAD, POST, DELETE")
+		return caddyhttp.Error(http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+	}
+
+	hadEntry := h.cache.invalidate(host)
+	h.logger.Info("dns mapping cache cleared",
+		zap.String("host", host),
+		zap.Bool("had_entry", hadEntry),
+	)
+
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return nil
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(true)
+	_ = enc.Encode(struct {
+		OK       bool   `json:"ok"`
+		Host     string `json:"host"`
+		HadEntry bool   `json:"had_entry"`
+	}{OK: true, Host: host, HadEntry: hadEntry})
 	return nil
 }
 

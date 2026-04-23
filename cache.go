@@ -53,6 +53,17 @@ func (c *domainCache) set(host, mappingID string, found bool, ttl time.Duration)
 	c.mu.Unlock()
 }
 
+// invalidate removes the cache entry for host (if any). Returns whether an entry existed.
+func (c *domainCache) invalidate(host string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.entries[host]; !ok {
+		return false
+	}
+	delete(c.entries, host)
+	return true
+}
+
 // resolveTTL picks the effective TTL using the precedence:
 //  1. Per-row DB value (seconds, non-nil and > 0)
 //  2. Handler-level TTL (from Caddyfile or env, already resolved)
