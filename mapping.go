@@ -216,12 +216,12 @@ func (h *S3MappingHandler) Cleanup() error {
 
 // ServeHTTP resolves the domain, builds a safe S3 key, and streams the object.
 func (h *S3MappingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	host := normalizeHost(r.Host)
+	host := effectiveRequestHost(r)
 	if host == "" {
 		return caddyhttp.Error(http.StatusBadRequest, fmt.Errorf("missing Host header"))
 	}
 
-	if path.Clean("/"+r.URL.Path) == cacheClearPath {
+	if isMappingCacheClearPath(r.URL.Path) {
 		return h.serveCacheClear(w, r, host)
 	}
 
@@ -375,6 +375,25 @@ func normalizeHost(hostport string) string {
 		h = hostport
 	}
 	return strings.ToLower(strings.TrimSpace(h))
+}
+
+// effectiveRequestHost returns the hostname used for mapping and cache keys.
+// When the server sits behind a reverse proxy or load balancer, the request
+// Host header is often the internal upstream name; X-Forwarded-Host then
+// carries the browser hostname (must only be trusted from known proxies).
+func effectiveRequestHost(r *http.Request) string {
+	if xfh := r.Header.Get("X-Forwarded-Host"); xfh != "" {
+		xfh = strings.TrimSpace(strings.Split(xfh, ",")[0])
+		if h := normalizeHost(xfh); h != "" {
+			return h
+		}
+	}
+	return normalizeHost(r.Host)
+}
+
+func isMappingCacheClearPath(urlPath string) bool {
+	p := path.Clean("/" + urlPath)
+	return strings.EqualFold(p, cacheClearPath)
 }
 
 // buildObjectKey constructs a safe S3 key under the mapping prefix.
